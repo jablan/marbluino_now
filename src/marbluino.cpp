@@ -56,7 +56,7 @@ bool isMultiplayer() {
   return playerCount > 1;
 }
 
-int baddiesCount(void) {
+uint8_t baddiesCount(void) {
   return points/BADDIE_RATE;
 }
 
@@ -281,6 +281,9 @@ void goToSleep() {
 
 struct payload_l_t {
   char header = 'L';
+  upoint_t flag;
+  uint8_t level;
+  upoint_t baddies[MAX_BADDIES];
   uint8_t playerCount;
   player_t players[MAX_PLAYERS];
 };
@@ -304,7 +307,9 @@ void addNewPlayer(uint8_t mac[6]) {
     memcpy(newPlayer->mac, mac, 6);
     playerCount++;
   }
-  players[playerIndex].isActive = false;
+  // TODO: temporarily active
+  // players[playerIndex].isActive = false;
+  players[playerIndex].isActive = true;
   initBall(&(players[playerIndex]));
 #ifdef DEBUG
   debugPlayerList();
@@ -313,6 +318,9 @@ void addNewPlayer(uint8_t mac[6]) {
 
 void publishPlayerList() {
   payload_l_t payload;
+  payload.flag = flag;
+  payload.level = points;
+  memcpy(&(payload.baddies), baddies, baddiesCount() * sizeof(upoint_t));
   payload.playerCount = playerCount;
   memcpy(&(payload.players), players, playerCount * sizeof(player_t));
   esp_now_send(NULL, (uint8_t *) &payload, sizeof(char) + sizeof(uint8_t) + playerCount * sizeof(player_t));
@@ -331,6 +339,17 @@ void updatePlayerPosition(uint8_t *mac, fpoint_t point) {
     Serial.println(point.y);
     players[playerIndex].ball = point;
   }
+}
+
+void handleBoardPayload(payload_l_t *payload) {
+  isMaster = false;
+  flag = payload->flag;
+  points = payload->level;
+  memcpy(&baddies, &(payload->baddies), baddiesCount() * sizeof(upoint_t));
+  playerCount = payload->playerCount;
+  memcpy(&players, &(payload->players), playerCount * sizeof(player_t));
+  myPlayer = getPlayerIndexByMac(myMac);
+  debugPlayerList();
 }
 
 void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
@@ -362,12 +381,9 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
   // player list
   case 'L':
     Serial.println("Received player list");
-    isMaster = false;
     payload_l_t *payload_l;
     payload_l = (payload_l_t *)payload;
-    playerCount = payload_l->playerCount;
-    memcpy(&players, &(payload_l->players), playerCount * sizeof(player_t));
-    debugPlayerList();
+    handleBoardPayload(payload_l);
     break;
   // player position
   case 'P':
@@ -435,7 +451,8 @@ void setup(void) {
   Serial.begin(9600);
 #endif
 #ifdef ESP8266
-  WiFi.macAddress(players[0].mac);
+  WiFi.macAddress(myMac);
+  memcpy(players[0].mac, myMac, 6);
   // memcpy(players[0].mac, WiFi.macAddress().c_str(), 6);
   WiFi.mode(WIFI_STA);
   if (esp_now_init() != 0) {
@@ -459,8 +476,8 @@ void setup(void) {
 
   players[myPlayer].isActive = true;
   checkIfOngoingMultiplayer();
+  initBall(&players[myPlayer]);
   if (isMaster) {
-    initBall(&players[myPlayer]);
     flag = randomPlace();
   }
 }
