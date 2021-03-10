@@ -61,3 +61,14 @@ void showPopup(const char *line_1, const char *line_2, uint8_t max_x, uint8_t ma
   u8g2.drawStr((max_x-width)/2, max_y/2 + 8, line_2);
   u8g2.sendBuffer();
 }
+
+void showPopup(char lines[][40], uint8_t numLines, uint8_t max_x, uint8_t max_y) {
+  u8g2.clearBuffer();
+  u8g2.drawRFrame(0, 0, max_x, max_y, 7);
+  uint8_t totalHeight = numLines * 7;
+  for (uint8_t row = 0; row < numLines; row++) {
+    uint8_t width = u8g2.getStrWidth(lines[row]);
+    u8g2.drawStr((max_x-width)/2, (max_y - totalHeight)/2 + (row+1)*7, lines[row]);
+  }
+  u8g2.sendBuffer();
+}

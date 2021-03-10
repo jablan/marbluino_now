@@ -29,3 +29,5 @@ void drawBoard(
   uint8_t max_x
 );
 void showPopup(const char *line_1, const char *line_2, uint8_t max_x, uint8_t max_y);
+
+void showPopup(char lines[][40], uint8_t numLines, uint8_t max_x, uint8_t max_y);

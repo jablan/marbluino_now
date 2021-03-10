@@ -1,25 +1,17 @@
 #include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <espnow.h>
 
 // #include "common.h"
 #include <mma_int.h>
 #include <graphic.h>
 #include <music.h>
 
-#ifdef ESP8266
-#include <ESP8266WiFi.h>
-#include <espnow.h>
-#endif
-
-#ifdef __AVR__
-#include "LowPower.h"
-#endif
-
 #define DEBUG true
 
 #define ACC_FACTOR 0.5
 #define BOUNCE_FACTOR -0.5
 #define DELAY 50
-// #define DELAY 500
 #define MAX_TIMER 10*1000/DELAY
 #define MIN_DISTANCE 30 // avoid spawning flags too close to the ball
 #define BADDIE_RATE 5 // spawn new baddie on every nth gathered flag
@@ -36,13 +28,13 @@ bool shouldPublishGameState = false;
 
 bool isMaster = true;
 
-void printMac(uint8_t *mac) {
+void printMac(const uint8_t *mac) {
   char msg[50];
   sprintf(msg, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   Serial.print(msg);
 }
 
-void printArray(uint8_t ary[], uint8_t len) {
+void printArray(const uint8_t ary[], const uint8_t len) {
   char str[10];
   for (uint8_t i = 0; i < len; i++) {
     sprintf(str, "%02x ", ary[i]);
@@ -54,7 +46,7 @@ bool isMultiplayer() {
   return playerCount > 1;
 }
 
-uint8_t baddiesCount(void) {
+uint8_t baddiesCount() {
   return level/BADDIE_RATE;
 }
 
@@ -66,7 +58,14 @@ uint8_t activeCount() {
   return result;
 }
 
-upoint_t randomPlace(void) {
+player_t *activePlayer() {
+  for (uint8_t i = 0; i < playerCount; i++) {
+    if (players[i].isActive) return &(players[i]);
+  }
+  return NULL;
+}
+
+upoint_t randomPlace() {
   upoint_t point;
   bool valid = true;
   do {
@@ -90,22 +89,14 @@ void initBall(player_t *player) {
   player->ball.y = max_y / 2;
 }
 
-bool isCollided(fpoint_t ball, upoint_t point) {
+bool isCollided(const fpoint_t ball, const upoint_t point) {
   return abs(ball.x-point.x) < 3 && abs(ball.y-point.y) < 3;
 }
 
-int8_t getPlayerIndexByMac(uint8_t mac[6]) {
-  // Serial.println("Getting player index by mac");
-  // printMac(mac);
-  // Serial.println();
-
+int8_t getPlayerIndexByMac(const uint8_t mac[6]) {
   for (uint8_t i = 0; i < playerCount; i++) {
-    // Serial.print("Comparing with ");
-    // printMac(players[i].mac);
-    // Serial.println();
     if (memcmp(mac, players[i].mac, 6) == 0) return i;
   }
-  // Serial.println("Not found");
   return -1;
 }
 
@@ -117,7 +108,7 @@ void removePlayer(player_t *player) {
   playerCount--;
 }
 
-void resetAllPlayers(bool state) {
+void resetAllPlayers(const bool state) {
   for (uint8_t i = 0; i < playerCount; i++) {
     players[i].isActive = state;
     players[i].points = 0;
@@ -126,6 +117,7 @@ void resetAllPlayers(bool state) {
 }
 
 void publishGameState() {
+  shouldPublishGameState = false;
   if (!isMultiplayer()) return;
   payload_l_t payload;
   payload.flag = flag;
@@ -142,32 +134,44 @@ int comparePlayers(const void *left, const void *right) {
   return pLeft->points - pRight->points;
 }
 
-void displayEndScreen() {
-  if (playerCount > 1) {
-    player_t playersCopy[MAX_PLAYERS];
-    memcpy(playersCopy, players, MAX_PLAYERS*sizeof(player_t));
-    qsort(playersCopy, playerCount, sizeof(player_t), comparePlayers);
-    char buf1[50], buf2[50];
-    sprintf(buf1, "1 %02x%02x: %d", playersCopy[0].mac[4], playersCopy[0].mac[5], playersCopy[0].points);
-    sprintf(buf2, "2 %02x%02x: %d", playersCopy[1].mac[4], playersCopy[1].mac[5], playersCopy[1].points);
-    showPopup(buf1, buf2, max_x, max_y);
-  } else {
-    char msg[50];
-    sprintf(msg, "score: %d", players[myPlayer].points);
-    showPopup("GAME OVER", msg, max_x, max_y);
+void displayTopList() {
+  player_t playersCopy[MAX_PLAYERS];
+  char list[6][40] = {"Top players:"};
+  memcpy(playersCopy, players, MAX_PLAYERS*sizeof(player_t));
+  qsort(playersCopy, playerCount, sizeof(player_t), comparePlayers);
+  for (uint8_t i = 0; i < playerCount; i++) {
+    sprintf(list[i+1], "%d %02x%02x: %d", i+1, playersCopy[i].mac[4], playersCopy[i].mac[5], playersCopy[i].points);
   }
+  showPopup(list, playerCount+1, max_x, max_y);
   popupDisplayTimer = 5000/DELAY; // 5 seconds
 }
 
-void userLostHandler(uint8_t mac[6]) {
+void displayGameOver() {
+  char msg[50];
+  sprintf(msg, "score: %d", players[myPlayer].points);
+  showPopup("GAME OVER", msg, max_x, max_y);
+  popupDisplayTimer = 5000/DELAY; // 5 seconds
+}
+
+void displayEndScreen() {
+  if (playerCount > 1) {
+    displayTopList();
+  } else {
+    displayGameOver();
+  }
+}
+
+void playerLostHandler(const uint8_t mac[6]) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
-  Serial.print("User lost: ");
+#ifdef DEBUG
+  Serial.print("Player lost: ");
   Serial.println(playerIndex);
+#endif
   if (playerIndex < 0) return;
   // handle game end
   players[playerIndex].isActive = false;
-  uint8_t usersLeft = activeCount();
-  if (usersLeft < 1) {
+  uint8_t playersLeft = activeCount();
+  if (playersLeft < 1) {
     if (myPlayer == playerIndex) {
       melodySad();
     } else {
@@ -175,13 +179,13 @@ void userLostHandler(uint8_t mac[6]) {
     }
     displayEndScreen();
     level = 0;
-  } else if (usersLeft == 1) {
+  } else if (playersLeft == 1) {
     // when only one player left, start measuring time
     timer = MAX_TIMER;
   }
 }
 
-void levelUpHandler(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t newBaddie) {
+void levelUpHandler(const uint8_t mac[6], const uint8_t newLevel, const upoint_t newFlag, const upoint_t newBaddie) {
   level = newLevel;
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (myPlayer == playerIndex) {
@@ -207,23 +211,17 @@ void levelUpHandler(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t
   }
 }
 
-void publishPosition(player_t player) {
+void publishPosition(const player_t player) {
   if (!isMultiplayer()) return;
   payload_p_t payload;
   payload.point = player.ball;
-  // Serial.print("Publishing position, len: ");
-  // Serial.println(sizeof(payload_p_t));
-  // Serial.println(payload.point.x);
-  // Serial.println(payload.point.y);
-  // printArray((uint8_t *)(&payload), sizeof(payload_p_t));
-  // Serial.println();
   esp_now_send(NULL, (uint8_t *) &payload, sizeof(payload_p_t));
 }
 
-void publishUserLost(player_t *player) {
+void publishPlayerLost(const player_t *player) {
   if (!isMultiplayer()) return;
 #ifdef DEBUG
-  Serial.println("Publishing user lost:");
+  Serial.println("Publishing player lost:");
   printMac(player->mac);
   Serial.print(" ball at ");
   Serial.print(player->ball.x);
@@ -236,20 +234,21 @@ void publishUserLost(player_t *player) {
 }
 
 void restartGame() {
-  // game restarts for everyone
   resetAllPlayers(true);
   level = 0;
   timer = MAX_TIMER;
   flag = randomPlace();
+  speed = {0.0, 0.0};
   publishGameState();
 }
 
-void userLost(player_t *player) {
-  publishUserLost(player);
-  userLostHandler(player->mac); // handle locally
+void playerLost(const player_t *player) {
+  if (player == NULL) return;
+  publishPlayerLost(player);
+  playerLostHandler(player->mac); // handle locally
 }
 
-void publishLevelUp(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t baddie) {
+void publishLevelUp(const uint8_t mac[6], const uint8_t newLevel, const upoint_t newFlag, const upoint_t baddie) {
   if (!isMultiplayer()) return;
   payload_u_t payload;
   payload.flag = newFlag;
@@ -260,7 +259,7 @@ void publishLevelUp(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t
   esp_now_send(NULL, (uint8_t *)&payload, sizeof(payload));
 }
 
-void levelUp(uint8_t mac[6]) {
+void levelUp(const uint8_t mac[6]) {
   timer = MAX_TIMER;
   level++;
   upoint_t newBaddie = {0, 0};
@@ -273,13 +272,13 @@ void levelUp(uint8_t mac[6]) {
   levelUpHandler(mac, level, newFlag, newBaddie);
 }
 
-void checkCollision(void) {
+void checkCollision() {
   if (!isMaster) return; // check only on master
   for (int playerIndex = 0; playerIndex < playerCount; playerIndex++) {
     player_t *player = &(players[playerIndex]);
     for(int baddieIndex = 0; baddieIndex <= baddiesCount(); baddieIndex++) {
       if (isCollided(player->ball, baddies[baddieIndex])) {
-        return userLost(player);
+        return playerLost(player);
       }
     }
     if (isCollided(player->ball, flag)) {
@@ -288,25 +287,18 @@ void checkCollision(void) {
   }
 }
 
-void updateMovement(void) {
+void updateMovement() {
   players[myPlayer].ball.x += speed.x;
   players[myPlayer].ball.y += speed.y;
   float xyz_g[3];
   getOrientation(xyz_g);
-
-// #ifdef DEBUG
-//   Serial.print("X:\t"); Serial.print(xyz_g[0]);
-//   Serial.print("\tY:\t"); Serial.print(xyz_g[1]);
-//   Serial.print("\tZ:\t"); Serial.print(xyz_g[2]);
-//   Serial.println();
-// #endif
 
   speed.x += ACC_FACTOR * (-xyz_g[0]);
   speed.y += ACC_FACTOR * xyz_g[1];
 }
 
 // bounce off walls with a diminishing factor
-void bounce(void) {
+void bounce() {
   fpoint_t ball = players[myPlayer].ball;
   if ((speed.x > 0 && ball.x >= max_x-BALLSIZE) || (speed.x < 0 && ball.x <= BALLSIZE)) {
     speed.x = BOUNCE_FACTOR * speed.x;
@@ -319,12 +311,7 @@ void bounce(void) {
 void goToSleep() {
   showPopup("SLEEPING...", "shake to wake", max_x, max_y);
   mmaSetupMotionDetection();
-#ifdef ESP8266
   ESP.deepSleep(0);
-#endif
-#ifdef __AVR__
-  LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
-#endif
 }
 
 void debugPlayerList() {
@@ -342,7 +329,7 @@ void debugPlayerList() {
   }
 }
 
-void addNewPlayer(uint8_t mac[6]) {
+void addNewPlayer(const uint8_t mac[6]) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (playerIndex == -1) { // new player
     if (playerCount >= MAX_PLAYERS) {
@@ -368,22 +355,14 @@ void addNewPlayer(uint8_t mac[6]) {
 #endif
 }
 
-void updatePlayerPosition(uint8_t *mac, fpoint_t point) {
-  // Serial.println("Updating player position");
-  // printMac(mac);
+void updatePlayerPosition(const uint8_t *mac, const fpoint_t point) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
-  // Serial.print(" found at position ");
-  // Serial.println(playerIndex);
   if (playerIndex >= 0) {
-    // Serial.print("setting coords: ");
-    // Serial.print(point.x);
-    // Serial.print(", ");
-    // Serial.println(point.y);
     players[playerIndex].ball = point;
   }
 }
 
-void handleBoardPayload(payload_l_t *payload) {
+void handleBoardPayload(const payload_l_t *payload) {
   isMaster = false;
   flag = payload->flag;
   level = payload->level;
@@ -399,18 +378,7 @@ void handleBoardPayload(payload_l_t *payload) {
 }
 
 void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
-// #ifdef DEBUG
-//   Serial.print("Received packet from ");
-//   printMac(mac);
-//   Serial.print(" length: ");
-//   Serial.println(len);
-// #endif
-
   if (len < 1) return;
-// #ifdef DEBUG
-//   Serial.print("Header: ");
-//   Serial.println(payload[0]);
-// #endif
   payload_l_t *payload_l;
   payload_p_t payload_p;
   payload_u_t *payload_u;
@@ -422,25 +390,17 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
   case 'E':
     if (isMaster) {
       addNewPlayer(mac);
-      shouldPublishGameState = true;
-      // publishGameState();
+      shouldPublishGameState = true; // publishing must be done outside the handler
     }
     break;
   // player list
   case 'L':
-    Serial.println("Received board state");
     payload_l = (payload_l_t *)payload;
     handleBoardPayload(payload_l);
     break;
   // player position
   case 'P':
-    // Serial.println("Received player position");
     memcpy(&payload_p, payload, sizeof(payload_p_t));
-    // payload_p = (payload_p_t *)payload;
-    // printArray((uint8_t *)&payload_p, sizeof(payload_p_t));
-    // Serial.println();
-
-    // Serial.println(payload_p.point.x);
     updatePlayerPosition(mac, payload_p.point);
     break;
   // level up
@@ -450,15 +410,13 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
     break;
   case 'F':
     payload_f = (payload_f_t *)payload;
-    userLostHandler(payload_f->mac);
-    break;
-  default:
+    playerLostHandler(payload_f->mac);
     break;
   }
 }
 
 void onDataSent(uint8_t *mac, uint8_t sendStatus) {
-  if (sendStatus != 0){
+  if (sendStatus != 0) {
     Serial.print("Delivery fail, status: ");
     Serial.println(sendStatus);
   }
@@ -482,15 +440,9 @@ void showPopupTick() {
   if (popupDisplayTimer > 0) popupDisplayTimer--;
 }
 
-void setup(void) {
-  randomSeed(analogRead(0));
-#ifdef DEBUG
-  Serial.begin(9600);
-#endif
-#ifdef ESP8266
+void setupEspNow() {
   WiFi.macAddress(myMac);
-  memcpy(players[0].mac, myMac, 6);
-  // memcpy(players[0].mac, WiFi.macAddress().c_str(), 6);
+
   WiFi.mode(WIFI_STA);
   if (esp_now_init() != 0) {
     Serial.println("Error initializing ESP-NOW");
@@ -503,13 +455,19 @@ void setup(void) {
   esp_now_register_recv_cb(onDataReceive);
 
   uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  // Register peer
   esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_SLAVE, 13, NULL, 0);
+}
+
+void setup(void) {
+  randomSeed(analogRead(0));
+#ifdef DEBUG
+  Serial.begin(9600);
 #endif
-
-  setupMMA();
-
   initGraphic(&max_x, &max_y);
+  setupEspNow();
+  setupMMA();
+  memcpy(players[0].mac, myMac, 6);
+
 
   players[myPlayer].isActive = true;
   checkIfOngoingMultiplayer();
@@ -520,10 +478,7 @@ void setup(void) {
 }
 
 void loop(void) {
-  if (shouldPublishGameState) {
-    shouldPublishGameState = false;
-    publishGameState();
-  }
+  if (shouldPublishGameState) publishGameState();
   if (activeCount() > 0) { // game ongoing
     bounce();
     checkCollision();
@@ -544,10 +499,13 @@ void loop(void) {
   if (timer > 0) {
     timer--;
   } else {
+    if (isMaster && activeCount() == 1) { // last player dies
+      playerLost(activePlayer());
+    }
     // if (level == 0) {
     //   goToSleep();
     // } else {
-    //   userLost(&(players[myPlayer]));
+    //   playerLost(&(players[myPlayer]));
     // }
   }
 }
