@@ -2,7 +2,8 @@
 
 uint16_t tonesFlag[][2] = {{698, 1}, {880, 1}, {1047, 1}, {0, 0}};
 uint16_t tonesLevel[][2] = {{1047, 1}, {988, 1}, {1047, 1}, {988, 1}, {1047, 1}, {0, 0}};
-uint16_t tonesSad[][2] = {{262, 1}, {247, 1}, {233, 1}, {220, 3}, {0, 0}};
+uint16_t tonesSad[][2] = {{262, 10}, {247, 10}, {233, 10}, {220, 30}, {0, 0}};
+uint16_t tonesEnd[][2] = {{392, 4}, {523, 4}, {659, 4}, {784, 8}, {659, 4}, {784, 16}, {0, 0}};
 
 uint8_t melodyIndex;
 uint16_t (*currentMelody)[2];
@@ -42,9 +43,18 @@ void melodyLevel(void) {
 }
 
 void melodySad(void) {
-  // this is played synchronously
-  for (uint8_t i = 0; tonesSad[i][1] > 0; i++) {
-    tone(BUZZER_PIN, tonesSad[i][0], tonesSad[i][1]*300);
-    delay(tonesSad[i][1] * 300 + 50);
+  currentMelody = tonesSad;
+  melodyIndex = 0;
+}
+
+void melodyEnd(void) {
+  currentMelody = tonesSad;
+  melodyIndex = 0;
+}
+
+void playSynchronously(uint16_t (*melody)[2]) {
+  for (uint8_t i = 0; melody[i][1] > 0; i++) {
+    tone(BUZZER_PIN, melody[i][0], melody[i][1]*300);
+    delay(melody[i][1] * 300 + 50);
   }
 }

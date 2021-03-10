@@ -15,3 +15,5 @@ void melodyFlag(void);
 void melodyLevel(void);
 
 void melodySad(void);
+
+void melodyEnd(void);

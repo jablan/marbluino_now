@@ -15,10 +15,12 @@ struct upoint_t {
 
 struct player_t {
   uint8_t mac[6];
+  uint8_t points = 0;
   bool isActive;
   fpoint_t ball;
 };
 
+// Board setup payload
 struct payload_l_t {
   char header = 'L';
   upoint_t flag;
@@ -28,16 +30,19 @@ struct payload_l_t {
   player_t players[MAX_PLAYERS];
 };
 
+// Position update payload
 struct payload_p_t {
   char header = 'P';
   fpoint_t point;
 };
 
+// Player lost payload
 struct payload_f_t {
   char header = 'F';
   uint8_t mac[6];
 };
 
+// Level up payload
 struct payload_u_t {
   char header = 'U';
   uint8_t level;

@@ -31,6 +31,7 @@ upoint_t flag, baddies[MAX_BADDIES];
 uint8_t playerCount = 1;
 uint8_t myPlayer = 0;
 uint8_t myMac[6];
+uint16_t popupDisplayTimer = 0;
 bool shouldPublishGameState = false;
 
 bool isMaster = true;
@@ -116,9 +117,10 @@ void removePlayer(player_t *player) {
   playerCount--;
 }
 
-void reactivateAll() {
+void resetAllPlayers(bool state) {
   for (uint8_t i = 0; i < playerCount; i++) {
-    players[i].isActive = true;
+    players[i].isActive = state;
+    players[i].points = 0;
     initBall(&(players[i]));
   }
 }
@@ -134,23 +136,49 @@ void publishGameState() {
   esp_now_send(NULL, (uint8_t *) &payload, sizeof(payload_l_t));
 }
 
+int comparePlayers(const void *left, const void *right) {
+  player_t *pLeft = (player_t *)left;
+  player_t *pRight = (player_t *)right;
+  return pLeft->points - pRight->points;
+}
+
+void displayEndScreen() {
+  if (playerCount > 1) {
+    player_t playersCopy[MAX_PLAYERS];
+    memcpy(playersCopy, players, MAX_PLAYERS*sizeof(player_t));
+    qsort(playersCopy, playerCount, sizeof(player_t), comparePlayers);
+    char buf1[50], buf2[50];
+    sprintf(buf1, "1 %02x%02x: %d", playersCopy[0].mac[4], playersCopy[0].mac[5], playersCopy[0].points);
+    sprintf(buf2, "2 %02x%02x: %d", playersCopy[1].mac[4], playersCopy[1].mac[5], playersCopy[1].points);
+    showPopup(buf1, buf2, max_x, max_y);
+  } else {
+    char msg[50];
+    sprintf(msg, "score: %d", players[myPlayer].points);
+    showPopup("GAME OVER", msg, max_x, max_y);
+  }
+  popupDisplayTimer = 5000/DELAY; // 5 seconds
+}
+
 void userLostHandler(uint8_t mac[6]) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
+  Serial.print("User lost: ");
+  Serial.println(playerIndex);
   if (playerIndex < 0) return;
-  if (myPlayer == playerIndex) {
-    char msg[50];
-    sprintf(msg, "score: %d", level);
-    showPopup("GAME OVER", msg, max_x, max_y);
-    melodySad();
-  }
-  players[playerIndex].isActive = false;
-
   // handle game end
-  // removePlayer(player);
-  if (activeCount() < 1) {
-    // print player list
+  players[playerIndex].isActive = false;
+  uint8_t usersLeft = activeCount();
+  if (usersLeft < 1) {
+    if (myPlayer == playerIndex) {
+      melodySad();
+    } else {
+      melodyEnd();
+    }
+    displayEndScreen();
+    level = 0;
+  } else if (usersLeft == 1) {
+    // when only one player left, start measuring time
+    timer = MAX_TIMER;
   }
-
 }
 
 void levelUpHandler(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t newBaddie) {
@@ -164,10 +192,19 @@ void levelUpHandler(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t
       melodyFlag();
     }
   }
-  if (level % BADDIE_RATE == 0) {
-    baddies[level / BADDIE_RATE] = newBaddie;
+  if (playerIndex >= 0) {
+    players[playerIndex].points++;
   }
   flag = newFlag;
+  if (level % BADDIE_RATE == 0) {
+    uint8_t baddieIndex = level / BADDIE_RATE;
+    if (baddieIndex >= MAX_BADDIES) {
+      displayEndScreen();
+      resetAllPlayers(false);
+    } else {
+      baddies[baddieIndex] = newBaddie;
+    }
+  }
 }
 
 void publishPosition(player_t player) {
@@ -185,32 +222,31 @@ void publishPosition(player_t player) {
 
 void publishUserLost(player_t *player) {
   if (!isMultiplayer()) return;
+#ifdef DEBUG
   Serial.println("Publishing user lost:");
   printMac(player->mac);
   Serial.print(" ball at ");
   Serial.print(player->ball.x);
   Serial.print(", ");
   Serial.println(player->ball.y);
+#endif
   payload_f_t payload;
   memcpy(payload.mac, player->mac, 6);
   esp_now_send(NULL, (uint8_t *)&payload, sizeof(payload));
+}
 
+void restartGame() {
+  // game restarts for everyone
+  resetAllPlayers(true);
+  level = 0;
+  timer = MAX_TIMER;
+  flag = randomPlace();
+  publishGameState();
 }
 
 void userLost(player_t *player) {
   publishUserLost(player);
-
   userLostHandler(player->mac); // handle locally
-
-  if (activeCount() < 1) {
-    // game restarts for everyone
-    reactivateAll();
-    level = 0;
-    timer = MAX_TIMER;
-    // TODO: broadcast this:
-    flag = randomPlace();
-    publishGameState();
-  }
 }
 
 void publishLevelUp(uint8_t mac[6], uint8_t newLevel, upoint_t newFlag, upoint_t baddie) {
@@ -238,6 +274,7 @@ void levelUp(uint8_t mac[6]) {
 }
 
 void checkCollision(void) {
+  if (!isMaster) return; // check only on master
   for (int playerIndex = 0; playerIndex < playerCount; playerIndex++) {
     player_t *player = &(players[playerIndex]);
     for(int baddieIndex = 0; baddieIndex <= baddiesCount(); baddieIndex++) {
@@ -298,7 +335,7 @@ void debugPlayerList() {
     printMac(players[i].mac);
     Serial.print(" active: ");
     Serial.print(players[i].isActive);
-    Serial.print(", corrds: x: ");
+    Serial.print(", coords: x: ");
     Serial.print(players[i].ball.x);
     Serial.print(", y: ");
     Serial.println(players[i].ball.y);
@@ -307,7 +344,11 @@ void debugPlayerList() {
 
 void addNewPlayer(uint8_t mac[6]) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
-  if (playerIndex == -1) {
+  if (playerIndex == -1) { // new player
+    if (playerCount >= MAX_PLAYERS) {
+      Serial.println("Max number of players reached, not adding another!");
+      return;
+    }
     Serial.println("New player not found, adding it");
     playerIndex = playerCount;
     player_t *newPlayer = &(players[playerIndex]);
@@ -320,6 +361,7 @@ void addNewPlayer(uint8_t mac[6]) {
   Serial.print("Player index: ");
   Serial.println(playerIndex);
   players[playerIndex].isActive = true;
+  players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
 #ifdef DEBUG
   debugPlayerList();
@@ -348,10 +390,12 @@ void handleBoardPayload(payload_l_t *payload) {
   memcpy(&baddies, &(payload->baddies), baddiesCount() * sizeof(upoint_t));
   playerCount = payload->playerCount;
   memcpy(&players, &(payload->players), playerCount * sizeof(player_t));
-  debugPlayerList();
   myPlayer = getPlayerIndexByMac(myMac);
+#ifdef DEBUG
+  debugPlayerList();
   Serial.print("My player index: ");
   Serial.println(myPlayer);
+#endif
 }
 
 void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
@@ -430,6 +474,14 @@ void checkIfOngoingMultiplayer() {
   delay(1000);
 }
 
+bool isShowingPopup() {
+  return popupDisplayTimer > 0;
+}
+
+void showPopupTick() {
+  if (popupDisplayTimer > 0) popupDisplayTimer--;
+}
+
 void setup(void) {
   randomSeed(analogRead(0));
 #ifdef DEBUG
@@ -472,16 +524,21 @@ void loop(void) {
     shouldPublishGameState = false;
     publishGameState();
   }
-  bounce();
-  if (isMaster) {
+  if (activeCount() > 0) { // game ongoing
+    bounce();
     checkCollision();
-  }
-  drawBoard(playerCount, myPlayer, players, flag, baddies, baddiesCount(), level, timer, max_x);
-  if (players[myPlayer].isActive) {
-    updateMovement();
-    publishPosition(players[myPlayer]);
+    if (!isShowingPopup()) {
+      drawBoard(playerCount, myPlayer, players, flag, baddies, baddiesCount(), level, timer, max_x);
+    }
+    if (players[myPlayer].isActive) {
+      updateMovement();
+      publishPosition(players[myPlayer]);
+    }
+  } else { // game over
+    if (!isShowingPopup()) restartGame();
   }
 
+  showPopupTick();
   playSound();
   delay(DELAY);
   if (timer > 0) {
