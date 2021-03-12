@@ -2,10 +2,10 @@
 #include <ESP8266WiFi.h>
 #include <espnow.h>
 
-// #include "common.h"
-#include <mma_int.h>
-#include <graphic.h>
-#include <music.h>
+#include "common.h"
+#include "mma_int.h"
+#include "graphic.h"
+#include "music.h"
 
 #define DEBUG true
 
@@ -65,6 +65,10 @@ player_t *activePlayer() {
   return NULL;
 }
 
+/**
+ * Finds a random place on the board, not super close to any of the active players
+ * @return coordinates of a random point
+ */
 upoint_t randomPlace() {
   upoint_t point;
   bool valid = true;
@@ -116,8 +120,12 @@ void resetAllPlayers(const bool state) {
   }
 }
 
+void publishEnlistNewPlayer() {
+  char header = 'E';
+  esp_now_send(NULL, (uint8_t *) &header, sizeof(header));
+}
+
 void publishGameState() {
-  shouldPublishGameState = false;
   if (!isMultiplayer()) return;
   payload_l_t payload;
   payload.flag = flag;
@@ -128,87 +136,15 @@ void publishGameState() {
   esp_now_send(NULL, (uint8_t *) &payload, sizeof(payload_l_t));
 }
 
-int comparePlayers(const void *left, const void *right) {
-  player_t *pLeft = (player_t *)left;
-  player_t *pRight = (player_t *)right;
-  return pLeft->points - pRight->points;
-}
+void publishLevelUp(const uint8_t mac[6], const uint8_t newLevel, const upoint_t newFlag, const upoint_t baddie) {
+  if (!isMultiplayer()) return;
+  payload_u_t payload;
+  payload.flag = newFlag;
+  payload.baddie = baddie;
+  payload.level = newLevel;
+  memcpy(payload.mac, mac, 6);
 
-void displayTopList() {
-  player_t playersCopy[MAX_PLAYERS];
-  char list[6][40] = {"Top players:"};
-  memcpy(playersCopy, players, MAX_PLAYERS*sizeof(player_t));
-  qsort(playersCopy, playerCount, sizeof(player_t), comparePlayers);
-  for (uint8_t i = 0; i < playerCount; i++) {
-    sprintf(list[i+1], "%d %02x%02x: %d", i+1, playersCopy[i].mac[4], playersCopy[i].mac[5], playersCopy[i].points);
-  }
-  showPopup(list, playerCount+1, max_x, max_y);
-  popupDisplayTimer = 5000/DELAY; // 5 seconds
-}
-
-void displayGameOver() {
-  char msg[50];
-  sprintf(msg, "score: %d", players[myPlayer].points);
-  showPopup("GAME OVER", msg, max_x, max_y);
-  popupDisplayTimer = 5000/DELAY; // 5 seconds
-}
-
-void displayEndScreen() {
-  if (playerCount > 1) {
-    displayTopList();
-  } else {
-    displayGameOver();
-  }
-}
-
-void playerLostHandler(const uint8_t mac[6]) {
-  int8_t playerIndex = getPlayerIndexByMac(mac);
-#ifdef DEBUG
-  Serial.print("Player lost: ");
-  Serial.println(playerIndex);
-#endif
-  if (playerIndex < 0) return;
-  // handle game end
-  players[playerIndex].isActive = false;
-  uint8_t playersLeft = activeCount();
-  if (playersLeft < 1) {
-    if (myPlayer == playerIndex) {
-      melodySad();
-    } else {
-      melodyEnd();
-    }
-    displayEndScreen();
-    level = 0;
-  } else if (playersLeft == 1) {
-    // when only one player left, start measuring time
-    timer = MAX_TIMER;
-  }
-}
-
-void levelUpHandler(const uint8_t mac[6], const uint8_t newLevel, const upoint_t newFlag, const upoint_t newBaddie) {
-  level = newLevel;
-  int8_t playerIndex = getPlayerIndexByMac(mac);
-  if (myPlayer == playerIndex) {
-    Serial.println("this is me leveling");
-    if (level % BADDIE_RATE == 0) {
-      melodyLevel();
-    } else {
-      melodyFlag();
-    }
-  }
-  if (playerIndex >= 0) {
-    players[playerIndex].points++;
-  }
-  flag = newFlag;
-  if (level % BADDIE_RATE == 0) {
-    uint8_t baddieIndex = level / BADDIE_RATE;
-    if (baddieIndex >= MAX_BADDIES) {
-      displayEndScreen();
-      resetAllPlayers(false);
-    } else {
-      baddies[baddieIndex] = newBaddie;
-    }
-  }
+  esp_now_send(NULL, (uint8_t *)&payload, sizeof(payload));
 }
 
 void publishPosition(const player_t player) {
@@ -233,13 +169,104 @@ void publishPlayerLost(const player_t *player) {
   esp_now_send(NULL, (uint8_t *)&payload, sizeof(payload));
 }
 
+/**
+ * comparator for sorting
+ * @param left left player
+ * @param right right player
+ * @return -1 if left < right, 1 if left > right, 0 if left == right
+ */
+int comparePlayers(const void *left, const void *right) {
+  player_t *pLeft = (player_t *)left;
+  player_t *pRight = (player_t *)right;
+  return pRight->points - pLeft->points;
+}
+
+void displayTopList() {
+  player_t playersCopy[MAX_PLAYERS];
+  char list[6][40] = {"Top players:"};
+  memcpy(playersCopy, players, MAX_PLAYERS*sizeof(player_t));
+  qsort(playersCopy, playerCount, sizeof(player_t), comparePlayers);
+  uint8_t styles[MAX_PLAYERS+1] = {LINE_ALIGN_CENTER};
+  for (uint8_t i = 0; i < playerCount; i++) {
+    styles[i+1] = LINE_ALIGN_LEFT | (myPlayer == i ? COLOR_INVERT : COLOR_NORMAL);
+    sprintf(list[i+1], "%d %02x%02x: %d", i+1, playersCopy[i].mac[4], playersCopy[i].mac[5], playersCopy[i].points);
+  }
+  showPopup(list, styles, playerCount+1, max_x, max_y);
+  popupDisplayTimer = 5000/DELAY; // 5 seconds
+}
+
+void displayGameOver() {
+  char text[2][40] = {"", "GAME OVER"};
+  sprintf(text[0], "score: %d", players[myPlayer].points);
+  uint8_t styles[] = {LINE_ALIGN_CENTER, LINE_ALIGN_CENTER};
+  showPopup(text, styles, 2, max_x, max_y);
+  popupDisplayTimer = 5000/DELAY; // 5 seconds
+}
+
+void displayEndScreen() {
+  if (playerCount > 1) {
+    displayTopList();
+  } else {
+    displayGameOver();
+  }
+}
+
+void playerLostHandler(const uint8_t mac[6]) {
+  int8_t playerIndex = getPlayerIndexByMac(mac);
+#ifdef DEBUG
+  Serial.print("Player lost: ");
+  Serial.println(playerIndex);
+#endif
+  if (playerIndex < 0) return;
+  // handle game end
+  players[playerIndex].isActive = false;
+  if (myPlayer == playerIndex) {
+    melodySad();
+    displayGameOver();
+  }
+  uint8_t playersLeft = activeCount();
+  if (playersLeft < 1) {
+    melodyEnd();
+    displayEndScreen();
+    level = 0;
+  } else if (playersLeft == 1) {
+    // when only one player left, start measuring time
+    timer = MAX_TIMER;
+  }
+}
+
+void levelUpHandler(const uint8_t mac[6], const uint8_t newLevel, const upoint_t newFlag, const upoint_t newBaddie) {
+  level = newLevel;
+  int8_t playerIndex = getPlayerIndexByMac(mac);
+  if (myPlayer == playerIndex) {
+    if (level % BADDIE_RATE == 0) {
+      melodyLevel();
+    } else {
+      melodyFlag();
+    }
+  }
+  if (playerIndex >= 0) {
+    players[playerIndex].points++;
+  }
+  flag = newFlag;
+  if (level % BADDIE_RATE == 0) {
+    uint8_t baddieIndex = level / BADDIE_RATE;
+    if (baddieIndex >= MAX_BADDIES) {
+      displayEndScreen();
+      resetAllPlayers(false);
+    } else {
+      baddies[baddieIndex] = newBaddie;
+    }
+  }
+}
+
 void restartGame() {
   resetAllPlayers(true);
   level = 0;
   timer = MAX_TIMER;
   flag = randomPlace();
   speed = {0.0, 0.0};
-  publishGameState();
+  if (isMaster) publishGameState();
 }
 
 void playerLost(const player_t *player) {
@@ -248,17 +275,10 @@ void playerLost(const player_t *player) {
   playerLostHandler(player->mac); // handle locally
 }
 
-void publishLevelUp(const uint8_t mac[6], const uint8_t newLevel, const upoint_t newFlag, const upoint_t baddie) {
-  if (!isMultiplayer()) return;
-  payload_u_t payload;
-  payload.flag = newFlag;
-  payload.baddie = baddie;
-  payload.level = newLevel;
-  memcpy(payload.mac, mac, 6);
-
-  esp_now_send(NULL, (uint8_t *)&payload, sizeof(payload));
-}
-
+/**
+ * On master only: level up - reinitialize timer, increase level, spawn new flag and baddie, publish new level, handle it
+ * @param mac MAC address of the player winning a point
+ */
 void levelUp(const uint8_t mac[6]) {
   timer = MAX_TIMER;
   level++;
@@ -276,6 +296,7 @@ void checkCollision() {
   if (!isMaster) return; // check only on master
   for (int playerIndex = 0; playerIndex < playerCount; playerIndex++) {
     player_t *player = &(players[playerIndex]);
+    if (!(player->isActive)) continue;
     for(int baddieIndex = 0; baddieIndex <= baddiesCount(); baddieIndex++) {
       if (isCollided(player->ball, baddies[baddieIndex])) {
         return playerLost(player);
@@ -287,6 +308,9 @@ void checkCollision() {
   }
 }
 
+/**
+ * gets the orientation from the accelerometer and updates the speed and position
+ */
 void updateMovement() {
   players[myPlayer].ball.x += speed.x;
   players[myPlayer].ball.y += speed.y;
@@ -297,7 +321,9 @@ void updateMovement() {
   speed.y += ACC_FACTOR * xyz_g[1];
 }
 
-// bounce off walls with a diminishing factor
+/**
+ * bounces off walls with a diminishing factor
+ */
 void bounce() {
   fpoint_t ball = players[myPlayer].ball;
   if ((speed.x > 0 && ball.x >= max_x-BALLSIZE) || (speed.x < 0 && ball.x <= BALLSIZE)) {
@@ -309,7 +335,9 @@ void bounce() {
 }
 
 void goToSleep() {
-  showPopup("SLEEPING...", "shake to wake", max_x, max_y);
+  char text[][40] = {"SLEEPING...", "shake to wake"};
+  uint8_t styles[] = {LINE_ALIGN_CENTER, LINE_ALIGN_CENTER};
+  showPopup(text, styles, 2, max_x, max_y);
   mmaSetupMotionDetection();
   ESP.deepSleep(0);
 }
@@ -329,14 +357,22 @@ void debugPlayerList() {
   }
 }
 
+/**
+ * Adds a player with the given mac to the player list
+ * @param mac MAC address of the new player
+ */
 void addNewPlayer(const uint8_t mac[6]) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (playerIndex == -1) { // new player
     if (playerCount >= MAX_PLAYERS) {
+#ifdef DEBUG
       Serial.println("Max number of players reached, not adding another!");
+#endif
       return;
     }
+#ifdef DEBUG
     Serial.println("New player not found, adding it");
+#endif
     playerIndex = playerCount;
     player_t *newPlayer = &(players[playerIndex]);
     memcpy(newPlayer->mac, mac, 6);
@@ -345,8 +381,6 @@ void addNewPlayer(const uint8_t mac[6]) {
 
   // TODO: temporarily active
   // players[playerIndex].isActive = false;
-  Serial.print("Player index: ");
-  Serial.println(playerIndex);
   players[playerIndex].isActive = true;
   players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
@@ -408,6 +442,7 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
     payload_u = (payload_u_t *)payload;
     levelUpHandler(payload_u->mac, payload_u->level, payload_u->flag, payload_u->baddie);
     break;
+  // player lost
   case 'F':
     payload_f = (payload_f_t *)payload;
     playerLostHandler(payload_f->mac);
@@ -420,11 +455,6 @@ void onDataSent(uint8_t *mac, uint8_t sendStatus) {
     Serial.print("Delivery fail, status: ");
     Serial.println(sendStatus);
   }
-}
-
-void publishEnlistNewPlayer() {
-  char header = 'E';
-  esp_now_send(NULL, (uint8_t *) &header, sizeof(header));
 }
 
 void checkIfOngoingMultiplayer() {
@@ -468,7 +498,6 @@ void setup(void) {
   setupMMA();
   memcpy(players[0].mac, myMac, 6);
 
-
   players[myPlayer].isActive = true;
   checkIfOngoingMultiplayer();
   if (isMaster) {
@@ -478,7 +507,10 @@ void setup(void) {
 }
 
 void loop(void) {
-  if (shouldPublishGameState) publishGameState();
+  if (shouldPublishGameState) {
+    publishGameState();
+    shouldPublishGameState = false;
+  }
   if (activeCount() > 0) { // game ongoing
     bounce();
     checkCollision();

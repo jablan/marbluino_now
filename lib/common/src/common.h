@@ -1,3 +1,6 @@
+#ifndef COMMON_H
+#define COMMON_H
+
 #include <Arduino.h>
 
 #define MAX_PLAYERS 5
@@ -50,3 +53,5 @@ struct payload_u_t {
   upoint_t baddie;
   uint8_t mac[6];
 };
+
+#endif

@@ -6,6 +6,7 @@ U8G2_PCD8544_84X48_F_4W_HW_SPI u8g2(U8G2_R0, DISPLAY_CS_PIN, DISPLAY_DC_PIN, DIS
 void initGraphic(uint8_t *max_x, uint8_t *max_y) {
   u8g2.begin();
   u8g2.setFont(u8g2_font_baby_tf);
+  u8g2.setFontMode(1);
   *max_x = u8g2.getDisplayWidth();
   *max_y = u8g2.getDisplayHeight();
 }
@@ -39,6 +40,8 @@ void drawBoard(
   for(int i=0; i <= baddiesCount; i++) {
     u8g2.drawFrame(baddies[i].x-2, baddies[i].y-2, 4, 4);
   }
+
+  u8g2.setDrawColor(2);
   // write level and time
   char status = myPlayer == 0 ? 'M' : 'S';
   sprintf(buf, "%c Lvl: %d Pts: %d", status, level, players[myPlayer].points);
@@ -49,26 +52,35 @@ void drawBoard(
     uint8_t width = u8g2.getStrWidth(buf);
     u8g2.drawStr(max_x-width, 5, buf);
   }
+  u8g2.setDrawColor(1);
+
   u8g2.sendBuffer();
 }
 
-void showPopup(const char *line_1, const char *line_2, uint8_t max_x, uint8_t max_y) {
+void showPopup(char lines[][40], uint8_t styles[], uint8_t numLines, uint8_t max_x, uint8_t max_y) {
   u8g2.clearBuffer();
   u8g2.drawRFrame(0, 0, max_x, max_y, 7);
-  uint8_t width = u8g2.getStrWidth(line_1);
-  u8g2.drawStr((max_x-width)/2, max_y/2 - 2, line_1);
-  width = u8g2.getStrWidth(line_2);
-  u8g2.drawStr((max_x-width)/2, max_y/2 + 8, line_2);
-  u8g2.sendBuffer();
-}
-
-void showPopup(char lines[][40], uint8_t numLines, uint8_t max_x, uint8_t max_y) {
-  u8g2.clearBuffer();
-  u8g2.drawRFrame(0, 0, max_x, max_y, 7);
+  u8g2.setFontMode(0);
   uint8_t totalHeight = numLines * 7;
   for (uint8_t row = 0; row < numLines; row++) {
     uint8_t width = u8g2.getStrWidth(lines[row]);
-    u8g2.drawStr((max_x-width)/2, (max_y - totalHeight)/2 + (row+1)*7, lines[row]);
+    u8g2_uint_t x;
+    switch (styles[row] & LINE_ALIGN_MASK)
+    {
+    case LINE_ALIGN_CENTER:
+      x = (max_x-width)/2;
+      break;
+    case LINE_ALIGN_RIGHT:
+      x = max_x - 5 - width;
+      break;
+    default:
+      x = 5;
+      break;
+    }
+    u8g2.setDrawColor((styles[row] & COLOR_MASK) == COLOR_INVERT ? 0 : 1);
+    u8g2.drawStr(x, (max_y - totalHeight)/2 + (row+1)*7, lines[row]);
   }
+  u8g2.setFontMode(1);
+  u8g2.setDrawColor(1);
   u8g2.sendBuffer();
 }

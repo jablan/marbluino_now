@@ -2,13 +2,15 @@
 
 uint16_t tonesFlag[][2] = {{698, 1}, {880, 1}, {1047, 1}, {0, 0}};
 uint16_t tonesLevel[][2] = {{1047, 1}, {988, 1}, {1047, 1}, {988, 1}, {1047, 1}, {0, 0}};
-uint16_t tonesSad[][2] = {{262, 8}, {247, 8}, {233, 8}, {220, 24}, {0, 0}};
-uint16_t tonesEnd[][2] = {{392, 4}, {523, 4}, {659, 4}, {784, 8}, {659, 4}, {784, 16}, {0, 0}};
+uint16_t tonesSad[][2] = {{262, 4}, {247, 4}, {233, 4}, {220, 12}, {0, 0}};
+uint16_t tonesEnd[][2] = {{392, 2}, {523, 2}, {659, 2}, {784, 4}, {659, 2}, {784, 8}, {0, 0}};
 
 uint8_t melodyIndex;
 uint16_t (*currentMelody)[2];
 
-// used to play the melody asynchronously while the user is playing
+/**
+ * plays the melody asynchronously while the user continues playing
+ */
 void playSound() {
   if (currentMelody) {
     uint8_t totalCount = 0;
@@ -48,11 +50,11 @@ void melodySad(void) {
 }
 
 void melodyEnd(void) {
-  currentMelody = tonesSad;
+  currentMelody = tonesEnd;
   melodyIndex = 0;
 }
 
-void playSynchronously(uint16_t (*melody)[2]) {
+void playSynchronously(const uint16_t (*melody)[2]) {
   for (uint8_t i = 0; melody[i][1] > 0; i++) {
     tone(BUZZER_PIN, melody[i][0], melody[i][1]*300);
     delay(melody[i][1] * 300 + 50);
