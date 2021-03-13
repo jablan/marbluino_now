@@ -16,17 +16,22 @@
 #define MAX_TIMER 10*1000/DELAY
 #define MIN_DISTANCE 30 // avoid spawning flags too close to the ball
 #define BADDIE_RATE 5 // spawn new baddie on every nth gathered flag
+#define KEEPALIVE_EACH 20 // publish keepalive record each 20 cycles
+#define CLEANUP_TIMEOUT 2000 // clean up players not publishing in the past 2 seconds
 
 player_t players[MAX_PLAYERS];
+last_seen_t lastSeen[MAX_PLAYERS*2]; // warning: this list is not cleaned up
 uint8_t max_x, max_y, level, timer = MAX_TIMER;
 fpoint_t balls[MAX_PLAYERS], speed = {0.0, 0.0};
 upoint_t flag, baddies[MAX_BADDIES];
 uint8_t playerCount = 1;
+uint8_t lastSeenCount = 0;
 uint8_t myPlayer = 0;
 uint8_t myMac[6];
 uint16_t popupDisplayTimer = 0;
 bool shouldPublishGameState = false;
 bool isMaster = true;
+unsigned long counter = 0;
 
 bool isMultiplayer() {
   return playerCount > 1;
@@ -105,15 +110,34 @@ int8_t getPlayerIndexByMac(const uint8_t mac[6]) {
   return -1;
 }
 
+int8_t getLastSeenByMac(const uint8_t mac[6]) {
+  for (uint8_t i = 0; i < lastSeenCount; i++) {
+    if (memcmp(mac, lastSeen[i].mac, 6) == 0) return i;
+  }
+  return -1;
+}
+
+void updateLastSeenByMac(const uint8_t mac[6]) {
+  int8_t i = getLastSeenByMac(mac);
+  if (i < 0) {
+    i = lastSeenCount;
+    lastSeenCount++;
+    memcpy(lastSeen[i].mac, mac, 6);
+  }
+  lastSeen[i].timestamp = millis();
+}
+
 /**
  * Removes a player from the player list
  */
-void removePlayer(player_t *player) {
-  int8_t playerIndex = getPlayerIndexByMac(player->mac);
+void removePlayer(int8_t playerIndex) {
+  Serial.print("Removing player with index ");
+  Serial.println(playerIndex);
   for (int i = playerIndex; i < playerCount-1; i++) {
     players[i] = players[i+1];
   }
   playerCount--;
+  debugPlayerList(players, playerCount);
 }
 
 /**
@@ -130,7 +154,7 @@ void resetAllPlayers(const bool state) {
   }
 }
 
-void publishEnlistNewPlayer() {
+void publishHello() {
   char header = 'E';
   esp_now_send(NULL, (uint8_t *) &header, sizeof(header));
 }
@@ -376,6 +400,7 @@ void addNewPlayer(const uint8_t mac[6]) {
     player_t *newPlayer = &(players[playerIndex]);
     memcpy(newPlayer->mac, mac, 6);
     playerCount++;
+    shouldPublishGameState = true; // publishing must be done outside the handler
   }
 
   // TODO: temporarily active
@@ -397,6 +422,7 @@ void updatePlayerPosition(const uint8_t *mac, const fpoint_t point) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (playerIndex >= 0) {
     players[playerIndex].ball = point;
+    updateLastSeenByMac(mac);
   }
 }
 
@@ -428,8 +454,8 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
   case 'E':
     if (isMaster) {
       addNewPlayer(mac);
-      shouldPublishGameState = true; // publishing must be done outside the handler
     }
+    updateLastSeenByMac(mac);
     break;
   // player list
   case 'L':
@@ -462,12 +488,26 @@ void onDataSent(uint8_t *mac, uint8_t sendStatus) {
 }
 
 void checkIfOngoingMultiplayer() {
-  publishEnlistNewPlayer();
+  publishHello();
   delay(1000);
 }
 
 bool isShowingPopup() {
   return popupDisplayTimer > 0;
+}
+
+void playerListCleanup() {
+  unsigned long now = millis();
+  for (uint8_t i = playerCount-1; i > 0; i--) {
+    int8_t lastSeenId = getLastSeenByMac(players[i].mac);
+    if (lastSeenId < 0) continue;
+    if (now - lastSeen[lastSeenId].timestamp > CLEANUP_TIMEOUT) {
+      Serial.print("Removing player ");
+      printMac(players[i].mac);
+      Serial.println();
+      removePlayer(i);
+    }
+  }
 }
 
 /**
@@ -529,6 +569,13 @@ void loop(void) {
       updateMovement();
       publishPosition(players[myPlayer]);
     }
+    if (counter % KEEPALIVE_EACH == 0) {
+      if (!players[myPlayer].isActive) {
+        // as position is not sent when inactive, send a keepalive instead
+        publishHello();
+      }
+      playerListCleanup();
+    }
   } else { // game over
     if (!isShowingPopup()) restartGame();
   }
@@ -536,6 +583,7 @@ void loop(void) {
   showPopupTick();
   playSound();
   delay(DELAY);
+  counter++;
   if (timer > 0) {
     timer--;
   } else {
