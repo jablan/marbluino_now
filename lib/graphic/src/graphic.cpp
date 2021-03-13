@@ -25,7 +25,7 @@ void drawBoard(
   static char buf[50];
   u8g2.clearBuffer();
   // draw marbles
-  for (int i = 0; i <= playerCount; i++) {
+  for (uint8_t i = 0; i < playerCount; i++) {
     player_t player = players[i];
     if (!player.isActive) continue;
     if (i == myPlayer) {
@@ -37,7 +37,7 @@ void drawBoard(
   // draw flag
   u8g2.drawTriangle(flag.x, flag.y-3, flag.x-3, flag.y+2, flag.x+3, flag.y+2);
   // draw baddies
-  for(int i=0; i <= baddiesCount; i++) {
+  for(uint8_t i = 0; i < baddiesCount; i++) {
     u8g2.drawFrame(baddies[i].x-2, baddies[i].y-2, 4, 4);
   }
 
@@ -45,7 +45,7 @@ void drawBoard(
   // write level and time
   char status = myPlayer == 0 ? 'M' : 'S';
   sprintf(buf, "%c Lvl: %d Pts: %d", status, level, players[myPlayer].points);
-  // itoa(level, buf, 10);
+
   u8g2.drawStr(0, 5, buf);
   if (timer > 0) {
     itoa(timer/10, buf, 10);

@@ -297,7 +297,7 @@ void levelUpHandler(const uint8_t mac[6], const uint8_t newLevel, const upoint_t
 void restartGame() {
   resetAllPlayers(true);
   level = 0;
-  timer = MAX_TIMER;
+  timer = activeCount() == 1 ? MAX_TIMER : 0;
   flag = randomPlace();
   speed = {0.0, 0.0};
   if (isMaster) publishGameState();
@@ -408,6 +408,7 @@ void addNewPlayer(const uint8_t mac[6]) {
   players[playerIndex].isActive = true;
   players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
+  if (activeCount() > 1) timer = 0;
 #ifdef DEBUG
   debugPlayerList(players, playerCount);
 #endif
@@ -434,6 +435,7 @@ void handleBoardPayload(const payload_l_t *payload) {
   playerCount = payload->playerCount;
   memcpy(&players, &(payload->players), playerCount * sizeof(player_t));
   myPlayer = getPlayerIndexByMac(myMac);
+  if (activeCount() > 1) timer = 0;
 #ifdef DEBUG
   debugPlayerList(players, playerCount);
   Serial.print("My player index: ");
@@ -498,7 +500,7 @@ bool isShowingPopup() {
 
 void playerListCleanup() {
   unsigned long now = millis();
-  for (uint8_t i = playerCount-1; i > 0; i--) {
+  for (int8_t i = playerCount-1; i >= 0; i--) {
     int8_t lastSeenId = getLastSeenByMac(players[i].mac);
     if (lastSeenId < 0) continue;
     if (now - lastSeen[lastSeenId].timestamp > CLEANUP_TIMEOUT) {
@@ -506,6 +508,9 @@ void playerListCleanup() {
       printMac(players[i].mac);
       Serial.println();
       removePlayer(i);
+      Serial.print("Players left: ");
+      Serial.println(playerCount);
+      if (activeCount() == 1 && timer == 0) timer = MAX_TIMER;
     }
   }
 }
