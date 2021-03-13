@@ -6,6 +6,7 @@
 #include "mma_int.h"
 #include "graphic.h"
 #include "music.h"
+#include "debug_helper.h"
 
 #define DEBUG true
 
@@ -25,22 +26,7 @@ uint8_t myPlayer = 0;
 uint8_t myMac[6];
 uint16_t popupDisplayTimer = 0;
 bool shouldPublishGameState = false;
-
 bool isMaster = true;
-
-void printMac(const uint8_t *mac) {
-  char msg[50];
-  sprintf(msg, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  Serial.print(msg);
-}
-
-void printArray(const uint8_t ary[], const uint8_t len) {
-  char str[10];
-  for (uint8_t i = 0; i < len; i++) {
-    sprintf(str, "%02x ", ary[i]);
-    Serial.print(str);
-  }
-}
 
 bool isMultiplayer() {
   return playerCount > 1;
@@ -88,15 +74,30 @@ upoint_t randomPlace() {
   return point;
 }
 
+/**
+ * puts the ball of a player to the center of the board
+ * @param player player whose ball position to reset
+ */
 void initBall(player_t *player) {
   player->ball.x = max_x / 2;
   player->ball.y = max_y / 2;
 }
 
+/**
+ * Checks if a ball collided with another point
+ * @param ball coordinates of the ball
+ * @param point coordinates of an object to check collision with
+ * @returns true if collided
+ */
 bool isCollided(const fpoint_t ball, const upoint_t point) {
   return abs(ball.x-point.x) < 3 && abs(ball.y-point.y) < 3;
 }
 
+/**
+ * Finds the player in the player list by mac
+ * @param mac MAC of the player to find
+ * @return index of a player in the list, -1 if not found
+ */
 int8_t getPlayerIndexByMac(const uint8_t mac[6]) {
   for (uint8_t i = 0; i < playerCount; i++) {
     if (memcmp(mac, players[i].mac, 6) == 0) return i;
@@ -104,14 +105,23 @@ int8_t getPlayerIndexByMac(const uint8_t mac[6]) {
   return -1;
 }
 
+/**
+ * Removes a player from the player list
+ */
 void removePlayer(player_t *player) {
-  int8_t playerIndex = getPlayerIndexByMac((*player).mac);
+  int8_t playerIndex = getPlayerIndexByMac(player->mac);
   for (int i = playerIndex; i < playerCount-1; i++) {
     players[i] = players[i+1];
   }
   playerCount--;
 }
 
+/**
+ * Reset the player table. Either set all active (restart game) or
+ * set all inactive (game ended by reaching max level). Resets the points
+ * of all users to 0 and ball positions to center of the board.
+ * @param state New active state of all users
+ */
 void resetAllPlayers(const bool state) {
   for (uint8_t i = 0; i < playerCount; i++) {
     players[i].isActive = state;
@@ -204,7 +214,7 @@ void displayGameOver() {
 }
 
 void displayEndScreen() {
-  if (playerCount > 1) {
+  if (isMultiplayer()) {
     displayTopList();
   } else {
     displayGameOver();
@@ -269,6 +279,10 @@ void restartGame() {
   if (isMaster) publishGameState();
 }
 
+/**
+ * (master only) publish info about a single player lost
+ * @param player player that lost
+ */
 void playerLost(const player_t *player) {
   if (player == NULL) return;
   publishPlayerLost(player);
@@ -342,21 +356,6 @@ void goToSleep() {
   ESP.deepSleep(0);
 }
 
-void debugPlayerList() {
-  Serial.println("Player list:");
-  for (uint8_t i = 0; i < playerCount; i++) {
-    Serial.print(i);
-    Serial.print(": ");
-    printMac(players[i].mac);
-    Serial.print(" active: ");
-    Serial.print(players[i].isActive);
-    Serial.print(", coords: x: ");
-    Serial.print(players[i].ball.x);
-    Serial.print(", y: ");
-    Serial.println(players[i].ball.y);
-  }
-}
-
 /**
  * Adds a player with the given mac to the player list
  * @param mac MAC address of the new player
@@ -385,10 +384,15 @@ void addNewPlayer(const uint8_t mac[6]) {
   players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
 #ifdef DEBUG
-  debugPlayerList();
+  debugPlayerList(players, playerCount);
 #endif
 }
 
+/**
+ * new position received, update appropriate player
+ * @param mac MAC address of the player sending the position
+ * @param point their current position
+ */
 void updatePlayerPosition(const uint8_t *mac, const fpoint_t point) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (playerIndex >= 0) {
@@ -405,7 +409,7 @@ void handleBoardPayload(const payload_l_t *payload) {
   memcpy(&players, &(payload->players), playerCount * sizeof(player_t));
   myPlayer = getPlayerIndexByMac(myMac);
 #ifdef DEBUG
-  debugPlayerList();
+  debugPlayerList(players, playerCount);
   Serial.print("My player index: ");
   Serial.println(myPlayer);
 #endif
@@ -466,6 +470,10 @@ bool isShowingPopup() {
   return popupDisplayTimer > 0;
 }
 
+/**
+ * popups are displayed asynchronously, the timer is decreased on every cycle,
+ * when the timer runs out, popup is removed.
+ */
 void showPopupTick() {
   if (popupDisplayTimer > 0) popupDisplayTimer--;
 }
