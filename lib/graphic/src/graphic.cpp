@@ -60,7 +60,6 @@ void drawBoard(
 void showPopup(char lines[][40], uint8_t styles[], uint8_t numLines, uint8_t max_x, uint8_t max_y) {
   u8g2.clearBuffer();
   u8g2.drawRFrame(0, 0, max_x, max_y, 7);
-  u8g2.setFontMode(0);
   Serial.println("Displaying popup");
   uint8_t totalHeight = numLines * 7;
   for (uint8_t row = 0; row < numLines; row++) {
@@ -85,12 +84,11 @@ void showPopup(char lines[][40], uint8_t styles[], uint8_t numLines, uint8_t max
     }
     y = (max_y - totalHeight)/2 + (row+1)*7;
     if ((styles[row] & COLOR_MASK) == COLOR_INVERT) {
-      u8g2.drawBox(x, y-7, width, 7);
+      u8g2.drawBox(x, y-6, width, 6);
+      u8g2.setDrawColor(0);
     }
-    // u8g2.setDrawColor( ? 0 : 1);
     u8g2.drawStr(x, y, lines[row]);
+    u8g2.setDrawColor(1);
   }
-  u8g2.setFontMode(1);
-  // u8g2.setDrawColor(1);
   u8g2.sendBuffer();
 }

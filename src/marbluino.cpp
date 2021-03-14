@@ -255,8 +255,8 @@ void displayTopList() {
 }
 
 void displayGameOver() {
-  char text[2][40] = {"", "GAME OVER"};
-  sprintf(text[0], "score: %d", players[myPlayer].points);
+  char text[2][40] = {"GAME OVER", ""};
+  sprintf(text[1], "score: %d", players[myPlayer].points);
   uint8_t styles[] = {LINE_ALIGN_CENTER, LINE_ALIGN_CENTER};
   showPopup(text, styles, 2, max_x, max_y);
   popupDisplayTimer = 5000/DELAY; // 5 seconds
