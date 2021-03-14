@@ -427,12 +427,12 @@ void addNewPlayer(const uint8_t mac[6]) {
     memcpy(newPlayer->mac, mac, 6);
     playerCount++;
     shouldPublishGameState = true; // publishing must be done outside the handler
+    // TODO: temporarily active
+    // players[playerIndex].isActive = false;
+    players[playerIndex].isActive = true;
+    players[playerIndex].points = 0;
   }
 
-  // TODO: temporarily active
-  // players[playerIndex].isActive = false;
-  players[playerIndex].isActive = true;
-  players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
   if (activeCount() > 1) timer = 0;
 #ifdef DEBUG
