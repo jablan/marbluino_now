@@ -60,11 +60,16 @@ void drawBoard(
 void showPopup(char lines[][40], uint8_t styles[], uint8_t numLines, uint8_t max_x, uint8_t max_y) {
   u8g2.clearBuffer();
   u8g2.drawRFrame(0, 0, max_x, max_y, 7);
-  u8g2.setFontMode(0);
+  Serial.println("Displaying popup");
   uint8_t totalHeight = numLines * 7;
   for (uint8_t row = 0; row < numLines; row++) {
+    Serial.print(row);
+    Serial.print(" ");
+    Serial.print(lines[row]);
+    Serial.print(" ");
+    Serial.println(styles[row]);
     uint8_t width = u8g2.getStrWidth(lines[row]);
-    u8g2_uint_t x;
+    u8g2_uint_t x, y;
     switch (styles[row] & LINE_ALIGN_MASK)
     {
     case LINE_ALIGN_CENTER:
@@ -77,10 +82,13 @@ void showPopup(char lines[][40], uint8_t styles[], uint8_t numLines, uint8_t max
       x = 5;
       break;
     }
-    u8g2.setDrawColor((styles[row] & COLOR_MASK) == COLOR_INVERT ? 0 : 1);
-    u8g2.drawStr(x, (max_y - totalHeight)/2 + (row+1)*7, lines[row]);
+    y = (max_y - totalHeight)/2 + (row+1)*7;
+    if ((styles[row] & COLOR_MASK) == COLOR_INVERT) {
+      u8g2.drawBox(x, y-6, width, 6);
+      u8g2.setDrawColor(0);
+    }
+    u8g2.drawStr(x, y, lines[row]);
+    u8g2.setDrawColor(1);
   }
-  u8g2.setFontMode(1);
-  u8g2.setDrawColor(1);
   u8g2.sendBuffer();
 }
