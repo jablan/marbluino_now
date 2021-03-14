@@ -20,7 +20,7 @@ void initGraphic(uint8_t *max_x, uint8_t *max_y);
 
 void drawBoard(
   uint8_t playerCount,
-  uint8_t myPlater,
+  uint8_t myPlayer,
   player_t players[],
   upoint_t flag,
   upoint_t baddies[],
