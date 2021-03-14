@@ -6,6 +6,7 @@
 #include "mma_int.h"
 #include "graphic.h"
 #include "music.h"
+#include "last_seen.h"
 #include "debug_helper.h"
 
 #define DEBUG true
@@ -20,12 +21,10 @@
 #define CLEANUP_TIMEOUT 2000 // clean up players not publishing in the past 2 seconds
 
 player_t players[MAX_PLAYERS];
-last_seen_t lastSeen[MAX_PLAYERS*2]; // warning: this list is not cleaned up
 uint8_t max_x, max_y, level, timer = MAX_TIMER;
 fpoint_t balls[MAX_PLAYERS], speed = {0.0, 0.0};
 upoint_t flag, baddies[MAX_BADDIES];
 uint8_t playerCount = 1;
-uint8_t lastSeenCount = 0;
 uint8_t myPlayer = 0;
 uint8_t myMac[6];
 uint8_t masterMac[6];
@@ -37,8 +36,12 @@ bool isMultiplayer() {
   return playerCount > 1;
 }
 
+bool sameMacs(const uint8_t left[6], const uint8_t right[6]) {
+  return memcmp(left, right, 6) == 0;
+}
+
 bool isMaster() {
-  return memcmp(myMac, masterMac, 6) == 0;
+  return sameMacs(myMac, masterMac);
 }
 
 uint8_t baddiesCount() {
@@ -109,26 +112,9 @@ bool isCollided(const fpoint_t ball, const upoint_t point) {
  */
 int8_t getPlayerIndexByMac(const uint8_t mac[6]) {
   for (uint8_t i = 0; i < playerCount; i++) {
-    if (memcmp(mac, players[i].mac, 6) == 0) return i;
+    if (sameMacs(mac, players[i].mac)) return i;
   }
   return -1;
-}
-
-int8_t getLastSeenByMac(const uint8_t mac[6]) {
-  for (uint8_t i = 0; i < lastSeenCount; i++) {
-    if (memcmp(mac, lastSeen[i].mac, 6) == 0) return i;
-  }
-  return -1;
-}
-
-void updateLastSeenByMac(const uint8_t mac[6]) {
-  int8_t i = getLastSeenByMac(mac);
-  if (i < 0) {
-    i = lastSeenCount;
-    lastSeenCount++;
-    memcpy(lastSeen[i].mac, mac, 6);
-  }
-  lastSeen[i].timestamp = millis();
 }
 
 /**
@@ -141,26 +127,34 @@ void replaceMaster() {
       memcpy(masterMac, players[0].mac, 6);
     }
   }
+#ifdef DEBUG
   Serial.print("New master: ");
   printMac(masterMac);
   Serial.println();
+#endif
 }
 
 /**
  * Removes a player from the player list
  */
 void removePlayer(int8_t playerIndex) {
-  bool masterGone = memcmp(players[playerIndex].mac, masterMac, 6) == 0;
+  bool masterGone = sameMacs(players[playerIndex].mac, masterMac);
+#ifdef DEBUG
   Serial.print("Removing player with index ");
   Serial.println(playerIndex);
+#endif
   for (int i = playerIndex; i < playerCount-1; i++) {
     players[i] = players[i+1];
   }
   playerCount--;
   myPlayer = getPlayerIndexByMac(myMac);
+#ifdef DEBUG
   debugPlayerList(players, playerCount);
+#endif
   if (masterGone) {
+#ifdef DEBUG
     Serial.println("Master gone, replacing...");
+#endif
     replaceMaster();
   }
 }
@@ -255,8 +249,8 @@ void displayTopList() {
 }
 
 void displayGameOver() {
-  char text[2][40] = {"", "GAME OVER"};
-  sprintf(text[0], "score: %d", players[myPlayer].points);
+  char text[2][40] = {"GAME OVER", ""};
+  sprintf(text[1], "score: %d", players[myPlayer].points);
   uint8_t styles[] = {LINE_ALIGN_CENTER, LINE_ALIGN_CENTER};
   showPopup(text, styles, 2, max_x, max_y);
   popupDisplayTimer = 5000/DELAY; // 5 seconds
@@ -410,7 +404,7 @@ void goToSleep() {
  * Adds a player with the given mac to the player list
  * @param mac MAC address of the new player
  */
-void addNewPlayer(const uint8_t mac[6]) {
+void registerNewPlayer(const uint8_t mac[6]) {
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (playerIndex == -1) { // new player
     if (playerCount >= MAX_PLAYERS) {
@@ -427,12 +421,11 @@ void addNewPlayer(const uint8_t mac[6]) {
     memcpy(newPlayer->mac, mac, 6);
     playerCount++;
     shouldPublishGameState = true; // publishing must be done outside the handler
-    // TODO: temporarily active
-    // players[playerIndex].isActive = false;
-    players[playerIndex].isActive = true;
-    players[playerIndex].points = 0;
   }
 
+  // change to false to prevent jumping in in the middle of the game:
+  players[playerIndex].isActive = true;
+  players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
   if (activeCount() > 1) timer = 0;
 #ifdef DEBUG
@@ -480,9 +473,7 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
   {
   // enlist new one
   case 'E':
-    if (isMaster()) {
-      addNewPlayer(mac);
-    }
+    if (isMaster()) registerNewPlayer(mac);
     updateLastSeenByMac(mac);
     break;
   // player list
@@ -515,6 +506,9 @@ void onDataSent(uint8_t *mac, uint8_t sendStatus) {
   }
 }
 
+/**
+ * Publish hello message and wait for the response from master, if any
+ */
 void checkIfOngoingMultiplayer() {
   publishHello();
   delay(1000);
@@ -524,20 +518,27 @@ bool isShowingPopup() {
   return popupDisplayTimer > 0;
 }
 
+/**
+ * Go through the list of players and remove all those that haven't send
+ * keepalive in the past CLEANUP_TIMEOUT milliseconds
+ */
 void playerListCleanup() {
   unsigned long now = millis();
   for (int8_t i = playerCount-1; i >= 0; i--) {
-    int8_t lastSeenId = getLastSeenByMac(players[i].mac);
-    if (lastSeenId < 0) continue;
-    if (now - lastSeen[lastSeenId].timestamp > CLEANUP_TIMEOUT) {
-      Serial.print("Removing player ");
-      printMac(players[i].mac);
-      Serial.println();
-      removePlayer(i);
-      Serial.print("Players left: ");
-      Serial.println(playerCount);
-      if (activeCount() == 1 && timer == 0) timer = MAX_TIMER;
-    }
+    unsigned long lastSeen = getLastSeenByMac(players[i].mac);
+    if (lastSeen == 0) continue;
+    if (now - lastSeen < CLEANUP_TIMEOUT) continue;
+#ifdef DEBUG
+    Serial.print("Removing player ");
+    printMac(players[i].mac);
+    Serial.println();
+#endif
+    removePlayer(i);
+#ifdef DEBUG
+    Serial.print("Players left: ");
+    Serial.println(playerCount);
+#endif
+    if (activeCount() == 1 && timer == 0) timer = MAX_TIMER;
   }
 }
 

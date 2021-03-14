@@ -23,11 +23,6 @@ struct player_t {
   fpoint_t ball;
 };
 
-struct last_seen_t {
-  uint8_t mac[6];
-  unsigned long timestamp;
-};
-
 // Board setup payload
 struct payload_l_t {
   char header = 'L';
