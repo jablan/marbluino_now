@@ -237,10 +237,12 @@ void displayGameOver() {
   popupDisplayTimer = 5000/DELAY; // 5 seconds
 }
 
-void displayEndScreen() {
+void displayEndScreen(bool happyEnd) {
   if (isMultiplayer()) {
+    melodyEnd();
     displayTopList();
   } else {
+    happyEnd ? melodyEnd() : melodySad();
     displayGameOver();
   }
 }
@@ -260,8 +262,7 @@ void playerLostHandler(const uint8_t mac[6]) {
   }
   uint8_t playersLeft = activeCount();
   if (playersLeft < 1) {
-    melodyEnd();
-    displayEndScreen();
+    displayEndScreen(false);
     level = 0;
   } else if (playersLeft == 1) {
     // when only one player left, start measuring time
@@ -286,10 +287,10 @@ void levelUpHandler(const uint8_t mac[6], const uint8_t newLevel, const upoint_t
   if (level % BADDIE_RATE == 0) {
     uint8_t baddieIndex = level / BADDIE_RATE;
     if (baddieIndex >= MAX_BADDIES) {
-      displayEndScreen();
+      displayEndScreen(true);
       resetAllPlayers(false);
     } else {
-      baddies[baddieIndex] = newBaddie;
+      baddies[baddieIndex-1] = newBaddie;
     }
   }
 }
@@ -335,7 +336,7 @@ void checkCollision() {
   for (int playerIndex = 0; playerIndex < playerCount; playerIndex++) {
     player_t *player = &(players[playerIndex]);
     if (!(player->isActive)) continue;
-    for(int baddieIndex = 0; baddieIndex <= baddiesCount(); baddieIndex++) {
+    for(int baddieIndex = 0; baddieIndex < baddiesCount(); baddieIndex++) {
       if (isCollided(player->ball, baddies[baddieIndex])) {
         return playerLost(player);
       }
