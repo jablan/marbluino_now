@@ -28,13 +28,17 @@ uint8_t playerCount = 1;
 uint8_t lastSeenCount = 0;
 uint8_t myPlayer = 0;
 uint8_t myMac[6];
+uint8_t masterMac[6];
 uint16_t popupDisplayTimer = 0;
 bool shouldPublishGameState = false;
-bool isMaster = true;
 unsigned long counter = 0;
 
 bool isMultiplayer() {
   return playerCount > 1;
+}
+
+bool isMaster() {
+  return memcmp(myMac, masterMac, 6) == 0;
 }
 
 uint8_t baddiesCount() {
@@ -128,16 +132,37 @@ void updateLastSeenByMac(const uint8_t mac[6]) {
 }
 
 /**
+ * replace master with a remaining player with the lowest MAC
+ */
+void replaceMaster() {
+  memcpy(masterMac, players[0].mac, 6);
+  for (uint8_t i = 1; i < playerCount; i++) {
+    if (memcmp(players[i].mac, masterMac, 6) == -1) {
+      memcpy(masterMac, players[0].mac, 6);
+    }
+  }
+  Serial.print("New master: ");
+  printMac(masterMac);
+  Serial.println();
+}
+
+/**
  * Removes a player from the player list
  */
 void removePlayer(int8_t playerIndex) {
+  bool masterGone = memcmp(players[playerIndex].mac, masterMac, 6) == 0;
   Serial.print("Removing player with index ");
   Serial.println(playerIndex);
   for (int i = playerIndex; i < playerCount-1; i++) {
     players[i] = players[i+1];
   }
   playerCount--;
+  myPlayer = getPlayerIndexByMac(myMac);
   debugPlayerList(players, playerCount);
+  if (masterGone) {
+    Serial.println("Master gone, replacing...");
+    replaceMaster();
+  }
 }
 
 /**
@@ -301,7 +326,7 @@ void restartGame() {
   timer = activeCount() == 1 ? MAX_TIMER : 0;
   flag = randomPlace();
   speed = {0.0, 0.0};
-  if (isMaster) publishGameState();
+  if (isMaster()) publishGameState();
 }
 
 /**
@@ -332,7 +357,7 @@ void levelUp(const uint8_t mac[6]) {
 }
 
 void checkCollision() {
-  if (!isMaster) return; // check only on master
+  if (!isMaster()) return; // check only on master
   for (int playerIndex = 0; playerIndex < playerCount; playerIndex++) {
     player_t *player = &(players[playerIndex]);
     if (!(player->isActive)) continue;
@@ -428,8 +453,8 @@ void updatePlayerPosition(const uint8_t *mac, const fpoint_t point) {
   }
 }
 
-void handleBoardPayload(const payload_l_t *payload) {
-  isMaster = false;
+void handleBoardPayload(const uint8_t *mac, const payload_l_t *payload) {
+  memcpy(masterMac, mac, 6);
   flag = payload->flag;
   level = payload->level;
   memcpy(&baddies, &(payload->baddies), baddiesCount() * sizeof(upoint_t));
@@ -455,7 +480,7 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
   {
   // enlist new one
   case 'E':
-    if (isMaster) {
+    if (isMaster()) {
       addNewPlayer(mac);
     }
     updateLastSeenByMac(mac);
@@ -463,7 +488,7 @@ void onDataReceive(uint8_t *mac, uint8_t *payload, uint8_t len) {
   // player list
   case 'L':
     payload_l = (payload_l_t *)payload;
-    handleBoardPayload(payload_l);
+    handleBoardPayload(mac, payload_l);
     break;
   // player position
   case 'P':
@@ -551,10 +576,11 @@ void setup(void) {
   setupEspNow();
   setupMMA();
   memcpy(players[0].mac, myMac, 6);
+  memcpy(masterMac, myMac, 6);
 
   players[myPlayer].isActive = true;
   checkIfOngoingMultiplayer();
-  if (isMaster) {
+  if (isMaster()) {
     initBall(&(players[myPlayer]));
     flag = randomPlace();
   }
@@ -593,7 +619,7 @@ void loop(void) {
   if (timer > 0) {
     timer--;
   } else {
-    if (isMaster && activeCount() == 1) { // last player dies
+    if (isMaster() && activeCount() == 1) { // last player dies
       playerLost(activePlayer());
     }
     // if (level == 0) {
