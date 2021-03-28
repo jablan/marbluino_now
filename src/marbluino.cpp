@@ -10,10 +10,13 @@
 #include "debug_helper.h"
 
 #define DEBUG true
+// depending on how your sensor and display are oriented, should be 1 or -1:
+#define MMA_X_ORIENTATION 1
+#define MMA_Y_ORIENTATION 1
 
-#define ACC_FACTOR 0.5
-#define BOUNCE_FACTOR -0.5
-#define DELAY 50
+#define ACC_FACTOR 0.5 // how strong "gravity" is
+#define BOUNCE_FACTOR -0.5 // the walls absorb 50% of the speed when hit
+#define DELAY 50 // ms between calculations and updates
 #define MAX_TIMER 10*1000/DELAY
 #define MIN_DISTANCE 30 // avoid spawning flags too close to the ball
 #define BADDIE_RATE 5 // spawn new baddie on every nth gathered flag
@@ -121,6 +124,9 @@ int8_t getPlayerIndexByMac(const uint8_t mac[6]) {
  * replace master with a remaining player with the lowest MAC
  */
 void replaceMaster() {
+#ifdef DEBUG
+  Serial.println("Replacing master");
+#endif
   memcpy(masterMac, players[0].mac, 6);
   for (uint8_t i = 1; i < playerCount; i++) {
     if (memcmp(players[i].mac, masterMac, 6) == -1) {
@@ -375,8 +381,8 @@ void updateMovement() {
   float xyz_g[3];
   getOrientation(xyz_g);
 
-  speed.x += ACC_FACTOR * (-xyz_g[0]);
-  speed.y += ACC_FACTOR * xyz_g[1];
+  speed.x += MMA_X_ORIENTATION * ACC_FACTOR * xyz_g[0];
+  speed.y += MMA_Y_ORIENTATION * ACC_FACTOR * xyz_g[1];
 }
 
 /**
@@ -405,6 +411,9 @@ void goToSleep() {
  * @param mac MAC address of the new player
  */
 void registerNewPlayer(const uint8_t mac[6]) {
+#ifdef DEBUG
+  Serial.println("Registering new player");
+#endif
   int8_t playerIndex = getPlayerIndexByMac(mac);
   if (playerIndex == -1) { // new player
     if (playerCount >= MAX_PLAYERS) {
@@ -423,8 +432,7 @@ void registerNewPlayer(const uint8_t mac[6]) {
     shouldPublishGameState = true; // publishing must be done outside the handler
   }
 
-  // change to false to prevent jumping in in the middle of the game:
-  players[playerIndex].isActive = true;
+  players[playerIndex].isActive = false;
   players[playerIndex].points = 0;
   initBall(&(players[playerIndex]));
   if (activeCount() > 1) timer = 0;
@@ -447,6 +455,9 @@ void updatePlayerPosition(const uint8_t *mac, const fpoint_t point) {
 }
 
 void handleBoardPayload(const uint8_t *mac, const payload_l_t *payload) {
+#ifdef DEBUG
+  Serial.println("Board payload received");
+#endif
   memcpy(masterMac, mac, 6);
   flag = payload->flag;
   level = payload->level;
